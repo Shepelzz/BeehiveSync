@@ -3,7 +3,6 @@ package com.beehiveprv.service;
 import com.beehiveprv.dto.PlayerData;
 import org.bukkit.Bukkit;
 import org.bukkit.OfflinePlayer;
-import org.bukkit.Statistic;
 import org.bukkit.advancement.Advancement;
 import org.bukkit.entity.Player;
 
@@ -21,17 +20,20 @@ import java.util.regex.Pattern;
 
 /**
  * Collects player statistics and builds {@link PlayerData} objects.
- * Shared by PlayerJoinListener, SyncCommand, and PeriodicSyncTask.
+ * Reads stats from world/stats/{uuid}.json on disk (works for both online and offline players).
  */
 public class PlayerDataService {
 
     public record MainThreadExtras(int advancements, boolean sponsor, boolean moderator, boolean admin) {}
 
-    private static final Statistic[] DISTANCE_STATS = {
-            Statistic.WALK_ONE_CM, Statistic.SPRINT_ONE_CM, Statistic.SWIM_ONE_CM,
-            Statistic.FLY_ONE_CM, Statistic.CLIMB_ONE_CM, Statistic.BOAT_ONE_CM,
-            Statistic.MINECART_ONE_CM, Statistic.HORSE_ONE_CM, Statistic.PIG_ONE_CM,
-            Statistic.STRIDER_ONE_CM, Statistic.AVIATE_ONE_CM
+    /** Raw numeric stats read from world/stats/{uuid}.json */
+    public record PlayerStats(long playtimeTicks, int kills, int deaths, long distanceCm) {}
+
+    private static final String[] DISTANCE_STAT_KEYS = {
+            "walk_one_cm", "sprint_one_cm", "swim_one_cm",
+            "fly_one_cm", "climb_one_cm", "boat_one_cm",
+            "minecart_one_cm", "horse_one_cm", "pig_one_cm",
+            "strider_one_cm", "aviate_one_cm"
     };
 
     private final Logger logger;
@@ -42,7 +44,7 @@ public class PlayerDataService {
         this.skinService = skinService;
     }
 
-    // ── Main-thread methods (advancements & permissions) ─────────────────
+    // ── Main-thread methods (advancements, permissions, world paths) ─────
 
     /**
      * Collect advancements and permissions for a single online player.
@@ -93,56 +95,57 @@ public class PlayerDataService {
      * <b>MUST be called on the main thread.</b>
      */
     public Path getAdvancementsFolder() {
-        return Bukkit.getWorlds().get(0).getWorldFolder().toPath().resolve("advancements");
+        return getWorldFolder().resolve("advancements");
+    }
+
+    /**
+     * Path to the world/stats/ folder.
+     * <b>MUST be called on the main thread.</b>
+     */
+    public Path getStatsFolder() {
+        return getWorldFolder().resolve("stats");
+    }
+
+    private Path getWorldFolder() {
+        return Bukkit.getWorlds().get(0).getWorldFolder().toPath();
     }
 
     // ── PlayerData building (any thread) ─────────────────────────────────
 
     /**
-     * Build {@link PlayerData} for a single player.
+     * Build {@link PlayerData} for a single player using disk-read stats.
      * Can be called from any thread.
-     *
-     * @param player  the player (online or offline)
-     * @param extras  main-thread data (null for offline players without extras)
-     * @param skinHead pre-resolved skin base64 (null if unavailable)
      */
-    public PlayerData buildPlayerData(OfflinePlayer player, MainThreadExtras extras, String skinHead) {
+    public PlayerData buildPlayerData(OfflinePlayer player, MainThreadExtras extras,
+                                      String skinHead, Path statsFolder) {
         String name = player.getName();
         if (name == null) return null;
 
-        long playtimeTicks = safeStat(player, Statistic.PLAY_ONE_MINUTE);
-        int kills = (int) safeStat(player, Statistic.PLAYER_KILLS);
-        int deaths = (int) safeStat(player, Statistic.DEATHS);
-        long distanceCm = 0;
-        for (Statistic s : DISTANCE_STATS) {
-            distanceCm += safeStat(player, s);
-        }
+        PlayerStats stats = readStatsFromDisk(statsFolder, player.getUniqueId());
 
         return new PlayerData(
                 player.getUniqueId(),
                 name,
                 skinHead,
-                playtimeTicks / 20L / 60L,
+                stats.playtimeTicks() / 20L / 60L,
                 extras != null ? extras.advancements() : 0,
                 extras != null && extras.sponsor(),
                 player.isBanned(),
                 extras != null && extras.moderator(),
                 extras != null && extras.admin(),
-                kills,
-                deaths,
-                distanceCm / 100_000.0
+                stats.kills(),
+                stats.deaths(),
+                stats.distanceCm() / 100_000.0
         );
     }
 
     /**
      * Build {@link PlayerData} for ALL known players.
-     * Resolves skins via {@link SkinService#getSkin(UUID)} (cache + SkinsRestorer fallback).
+     * Reads stats and advancements from disk, resolves skins via cache + SkinsRestorer.
      * Can be called from any thread (pass pre-collected main-thread data).
-     *
-     * @param onlineExtras main-thread extras for online players
-     * @param advFolder    path to world/advancements/ folder
      */
-    public List<PlayerData> buildAllPlayerData(Map<UUID, MainThreadExtras> onlineExtras, Path advFolder) {
+    public List<PlayerData> buildAllPlayerData(Map<UUID, MainThreadExtras> onlineExtras,
+                                               Path advFolder, Path statsFolder) {
         boolean advFolderExists = Files.isDirectory(advFolder);
         OfflinePlayer[] allPlayers = Bukkit.getOfflinePlayers();
         List<PlayerData> result = new ArrayList<>(allPlayers.length);
@@ -159,11 +162,49 @@ public class PlayerDataService {
             }
 
             String skin = skinService.getSkin(uuid);
-            PlayerData data = buildPlayerData(op, extras, skin);
+            PlayerData data = buildPlayerData(op, extras, skin, statsFolder);
             if (data != null) result.add(data);
         }
 
         return result;
+    }
+
+    // ── Disk-based stats reading ─────────────────────────────────────────
+
+    /**
+     * Read player stats from world/stats/{uuid}.json.
+     * File format:
+     * <pre>
+     * { "stats": { "minecraft:custom": { "minecraft:play_one_minute": 12345, ... } } }
+     * </pre>
+     * Safe to call from any thread.
+     */
+    public PlayerStats readStatsFromDisk(Path statsFolder, UUID uuid) {
+        Path statsFile = statsFolder.resolve(uuid + ".json");
+        if (!Files.exists(statsFile)) return new PlayerStats(0, 0, 0, 0);
+
+        try {
+            String content = Files.readString(statsFile, StandardCharsets.UTF_8);
+
+            long playtime = extractStat(content, "play_one_minute");
+            int kills = (int) extractStat(content, "player_kills");
+            int deaths = (int) extractStat(content, "deaths");
+
+            long distanceCm = 0;
+            for (String key : DISTANCE_STAT_KEYS) {
+                distanceCm += extractStat(content, key);
+            }
+
+            return new PlayerStats(playtime, kills, deaths, distanceCm);
+        } catch (Exception e) {
+            logger.warning("Failed to read stats for " + uuid + ": " + e.getMessage());
+            return new PlayerStats(0, 0, 0, 0);
+        }
+    }
+
+    private static long extractStat(String content, String statName) {
+        Matcher m = Pattern.compile("\"minecraft:" + statName + "\"\\s*:\\s*(\\d+)").matcher(content);
+        return m.find() ? Long.parseLong(m.group(1)) : 0;
     }
 
     // ── Disk-based advancement counting ──────────────────────────────────
@@ -223,13 +264,5 @@ public class PlayerDataService {
             if (!a.getKey().getKey().startsWith("recipes/")) list.add(a);
         });
         return list;
-    }
-
-    private static long safeStat(OfflinePlayer player, Statistic stat) {
-        try {
-            return player.getStatistic(stat);
-        } catch (Exception e) {
-            return 0;
-        }
     }
 }

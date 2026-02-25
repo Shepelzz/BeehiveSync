@@ -12,6 +12,7 @@ import org.bukkit.event.Listener;
 import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.plugin.java.JavaPlugin;
 
+import java.nio.file.Path;
 import java.util.List;
 import java.util.logging.Logger;
 
@@ -45,14 +46,15 @@ public class PlayerJoinListener implements Listener {
 
         Player player = event.getPlayer();
 
-        // Collect advancements & permissions on the main thread (we're on it right now)
+        // Collect advancements, permissions, and world paths on the main thread
         MainThreadExtras extras = dataService.collectMainThreadExtras(player);
+        Path statsFolder = dataService.getStatsFolder();
 
-        // Skin download + stats collection + HTTP send — all async
+        // Skin download + disk stats + HTTP send — all async
         plugin.getServer().getScheduler().runTaskAsynchronously(plugin, () -> {
             try {
                 String skinHead = skinService.buildAndCache(player);
-                PlayerData data = dataService.buildPlayerData(player, extras, skinHead);
+                PlayerData data = dataService.buildPlayerData(player, extras, skinHead, statsFolder);
                 if (data != null) {
                     apiClient.sendPlayers(List.of(data));
                 }

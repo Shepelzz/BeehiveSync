@@ -3,7 +3,6 @@ package com.beehiveprv.command;
 import com.beehiveprv.dto.PlayerData;
 import com.beehiveprv.service.PlayerDataService;
 import com.beehiveprv.service.PlayerDataService.MainThreadExtras;
-import com.beehiveprv.service.SkinService;
 import com.beehiveprv.service.SyncApiClient;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandExecutor;
@@ -85,13 +84,14 @@ public class SyncCommand implements CommandExecutor {
     }
 
     private List<PlayerData> collectAllPlayers(CommandSender feedback) throws Exception {
-        // Main thread: collect online extras + advancement folder path
+        // Main thread: collect online extras + world folder paths
         CompletableFuture<MainThreadResult> future = new CompletableFuture<>();
         plugin.getServer().getScheduler().runTask(plugin, () -> {
             try {
                 Map<UUID, MainThreadExtras> extras = dataService.collectAllMainThreadExtras();
                 Path advFolder = dataService.getAdvancementsFolder();
-                future.complete(new MainThreadResult(extras, advFolder));
+                Path statsFolder = dataService.getStatsFolder();
+                future.complete(new MainThreadResult(extras, advFolder, statsFolder));
             } catch (Exception e) {
                 future.completeExceptionally(e);
             }
@@ -99,9 +99,9 @@ public class SyncCommand implements CommandExecutor {
 
         MainThreadResult mtr = future.get(30, TimeUnit.SECONDS);
 
-        // Async: build all player data (stats + skins + disk advancements)
+        // Async: build all player data (disk stats + skins + disk advancements)
         feedback.sendMessage("\u00a77Collecting player data...");
-        List<PlayerData> result = dataService.buildAllPlayerData(mtr.extras(), mtr.advFolder());
+        List<PlayerData> result = dataService.buildAllPlayerData(mtr.extras(), mtr.advFolder(), mtr.statsFolder());
         feedback.sendMessage("\u00a77Collected " + result.size() + " players.");
         return result;
     }
@@ -120,5 +120,5 @@ public class SyncCommand implements CommandExecutor {
         sender.sendMessage("\u00a7aDumped " + players.size() + " players \u2192 " + out);
     }
 
-    private record MainThreadResult(Map<UUID, MainThreadExtras> extras, Path advFolder) {}
+    private record MainThreadResult(Map<UUID, MainThreadExtras> extras, Path advFolder, Path statsFolder) {}
 }
