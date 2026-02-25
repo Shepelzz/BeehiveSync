@@ -1,0 +1,11 @@
+name: BeehiveSync
+version: '1.0-SNAPSHOT'
+main: com.beehiveprv.BeehiveSync
+api-version: '1.21'
+
+commands:
+  sync:
+    description: Sync all player data to Beehive website
+    usage: /sync alldata
+    permission: beehivesync.admin
+    permission-message: You need to be OP to use this command.

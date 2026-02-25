@@ -1,0 +1,4 @@
+sync:
+  url: "https://beehiveprv.club/api/sync.php"
+  token: ""
+  interval-minutes: 5

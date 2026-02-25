@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__ide__getDiagnostics",
+      "WebSearch",
+      "WebFetch(domain:skinsrestorer.net)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:jd.skinsrestorer.net)",
+      "WebFetch(domain:api.github.com)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebFetch(domain:www.spigotmc.org)"
+    ]
+  }
+}
