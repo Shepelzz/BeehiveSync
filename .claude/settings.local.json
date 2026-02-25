@@ -8,7 +8,9 @@
       "WebFetch(domain:jd.skinsrestorer.net)",
       "WebFetch(domain:api.github.com)",
       "WebFetch(domain:raw.githubusercontent.com)",
-      "WebFetch(domain:www.spigotmc.org)"
+      "WebFetch(domain:www.spigotmc.org)",
+      "Bash(tree -L 4 /Users/yevhenshepel/IdeaProjects/BeehiveSync -I '.idea' 2>/dev/null || find /Users/yevhenshepel/IdeaProjects/BeehiveSync -not -path '*/.*' -type f | head -20)",
+      "Bash(mvn compile 2>&1)"
     ]
   }
 }
