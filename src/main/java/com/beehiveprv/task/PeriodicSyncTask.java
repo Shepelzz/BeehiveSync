@@ -3,6 +3,7 @@
 //import com.beehiveprv.dto.PlayerData;
 //import com.beehiveprv.service.PlayerDataService;
 //import com.beehiveprv.service.PlayerDataService.MainThreadExtras;
+//import com.beehiveprv.service.PlayerDataService.PlayerStats;
 //import com.beehiveprv.service.SyncApiClient;
 //import org.bukkit.plugin.java.JavaPlugin;
 //
@@ -37,13 +38,14 @@
 //        if (!plugin.isEnabled()) return;
 //
 //        try {
-//            // Hop to main thread for advancements & permissions
+//            // Hop to main thread for advancements, permissions & stats
 //            CompletableFuture<MainThreadResult> future = new CompletableFuture<>();
 //            plugin.getServer().getScheduler().runTask(plugin, () -> {
 //                try {
 //                    Map<UUID, MainThreadExtras> extras = dataService.collectAllMainThreadExtras();
+//                    Map<UUID, PlayerStats> stats = dataService.collectAllPlayerStats();
 //                    Path advFolder = dataService.getAdvancementsFolder();
-//                    future.complete(new MainThreadResult(extras, advFolder));
+//                    future.complete(new MainThreadResult(extras, stats, advFolder));
 //                } catch (Exception e) {
 //                    future.completeExceptionally(e);
 //                }
@@ -51,8 +53,8 @@
 //
 //            MainThreadResult mtr = future.get(30, TimeUnit.SECONDS);
 //
-//            // Build all player data (async: stats, skins, disk advancements)
-//            List<PlayerData> players = dataService.buildAllPlayerData(mtr.extras(), mtr.advFolder());
+//            // Build all player data (async: skins, disk advancements)
+//            List<PlayerData> players = dataService.buildAllPlayerData(mtr.extras(), mtr.stats(), mtr.advFolder());
 //
 //            if (!players.isEmpty()) {
 //                int sent = apiClient.sendPlayers(players);
@@ -63,5 +65,5 @@
 //        }
 //    }
 //
-//    private record MainThreadResult(Map<UUID, MainThreadExtras> extras, Path advFolder) {}
+//    private record MainThreadResult(Map<UUID, MainThreadExtras> extras, Map<UUID, PlayerStats> stats, Path advFolder) {}
 //}

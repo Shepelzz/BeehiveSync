@@ -89,9 +89,9 @@ public class SyncCommand implements CommandExecutor {
         plugin.getServer().getScheduler().runTask(plugin, () -> {
             try {
                 Map<UUID, MainThreadExtras> extras = dataService.collectAllMainThreadExtras();
+                Map<UUID, PlayerDataService.PlayerStats> stats = dataService.collectAllPlayerStats();
                 Path advFolder = dataService.getAdvancementsFolder();
-                Path statsFolder = dataService.getStatsFolder();
-                future.complete(new MainThreadResult(extras, advFolder, statsFolder));
+                future.complete(new MainThreadResult(extras, stats, advFolder));
             } catch (Exception e) {
                 future.completeExceptionally(e);
             }
@@ -101,7 +101,7 @@ public class SyncCommand implements CommandExecutor {
 
         // Async: build all player data (disk stats + skins + disk advancements)
         feedback.sendMessage("\u00a77Collecting player data...");
-        List<PlayerData> result = dataService.buildAllPlayerData(mtr.extras(), mtr.advFolder(), mtr.statsFolder());
+        List<PlayerData> result = dataService.buildAllPlayerData(mtr.extras(), mtr.stats(), mtr.advFolder());
         feedback.sendMessage("\u00a77Collected " + result.size() + " players.");
         return result;
     }
@@ -120,5 +120,5 @@ public class SyncCommand implements CommandExecutor {
         sender.sendMessage("\u00a7aDumped " + players.size() + " players \u2192 " + out);
     }
 
-    private record MainThreadResult(Map<UUID, MainThreadExtras> extras, Path advFolder, Path statsFolder) {}
+    private record MainThreadResult(Map<UUID, MainThreadExtras> extras, Map<UUID, PlayerDataService.PlayerStats> stats, Path advFolder) {}
 }

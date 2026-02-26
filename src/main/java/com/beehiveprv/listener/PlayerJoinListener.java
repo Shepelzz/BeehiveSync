@@ -3,6 +3,7 @@ package com.beehiveprv.listener;
 import com.beehiveprv.dto.PlayerData;
 import com.beehiveprv.service.PlayerDataService;
 import com.beehiveprv.service.PlayerDataService.MainThreadExtras;
+import com.beehiveprv.service.PlayerDataService.PlayerStats;
 import com.beehiveprv.service.SkinService;
 import com.beehiveprv.service.SyncApiClient;
 import org.bukkit.entity.Player;
@@ -12,7 +13,6 @@ import org.bukkit.event.Listener;
 import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.plugin.java.JavaPlugin;
 
-import java.nio.file.Path;
 import java.util.List;
 import java.util.logging.Logger;
 
@@ -46,15 +46,15 @@ public class PlayerJoinListener implements Listener {
 
         Player player = event.getPlayer();
 
-        // Collect advancements, permissions, and world paths on the main thread
+        // Collect advancements, permissions, and stats on the main thread
         MainThreadExtras extras = dataService.collectMainThreadExtras(player);
-        Path statsFolder = dataService.getStatsFolder();
+        PlayerStats stats = dataService.collectPlayerStats(player);
 
-        // Skin download + disk stats + HTTP send — all async
+        // Skin download + HTTP send — all async
         plugin.getServer().getScheduler().runTaskAsynchronously(plugin, () -> {
             try {
                 String skinHead = skinService.buildAndCache(player);
-                PlayerData data = dataService.buildPlayerData(player, extras, skinHead, statsFolder);
+                PlayerData data = dataService.buildPlayerData(player, extras, stats, skinHead);
                 if (data != null) {
                     apiClient.sendPlayers(List.of(data));
                 }
