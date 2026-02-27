@@ -4,7 +4,10 @@ import com.beehiveprv.command.SyncCommand;
 import com.beehiveprv.listener.PlayerJoinListener;
 import com.beehiveprv.service.PlayerDataService;
 import com.beehiveprv.service.SkinService;
+import com.beehiveprv.service.LuckPermsService;
+import com.beehiveprv.service.SkinRetryQueue;
 import com.beehiveprv.service.SyncApiClient;
+import com.beehiveprv.service.SyncOutputService;
 import org.bukkit.plugin.java.JavaPlugin;
 
 import java.util.Objects;
@@ -15,35 +18,32 @@ public final class BeehiveSync extends JavaPlugin {
     public void onEnable() {
         saveDefaultConfig();
 
+        String mode = getConfig().getString("sync.mode", "api");
         String url = getConfig().getString("sync.url", "https://beehiveprv.club/api/sync.php");
         String token = getConfig().getString("sync.token", "");
-        long intervalMinutes = getConfig().getLong("sync.interval-minutes", 5);
+
+        boolean fileMode = "file".equalsIgnoreCase(mode);
+        boolean fetchMojangSkin = getConfig().getBoolean("sync.fetch-mojang-skin", true);
 
         // Services
-        SkinService skinService = new SkinService(getLogger(), getDataFolder().toPath());
+        SkinService skinService = new SkinService(getLogger(), getDataFolder().toPath(), fetchMojangSkin);
         SyncApiClient apiClient = new SyncApiClient(getLogger(), url, token);
-        PlayerDataService dataService = new PlayerDataService(getLogger(), skinService);
+        LuckPermsService luckPerms = new LuckPermsService(getLogger());
+        PlayerDataService dataService = new PlayerDataService(getLogger(), skinService, luckPerms);
+        SyncOutputService syncOutput = new SyncOutputService(
+                getLogger(), fileMode, apiClient, getDataFolder().toPath());
 
-        // PlayerJoin listener — syncs individual player on join (no-op if no token)
+        getLogger().info("Output mode: " + (fileMode ? "file" : "api"));
+
+        SkinRetryQueue retryQueue = new SkinRetryQueue(this, skinService, syncOutput);
+
+        // PlayerJoin listener
         getServer().getPluginManager().registerEvents(
-                new PlayerJoinListener(this, dataService, skinService, apiClient), this);
+                new PlayerJoinListener(this, dataService, skinService, syncOutput), this);
 
-        // Periodic sync — only if token is set
-//        if (apiClient.isConfigured()) {
-//            long intervalTicks = intervalMinutes * 60L * 20L;
-//            getServer().getScheduler().runTaskTimerAsynchronously(
-//                    this,
-//                    new PeriodicSyncTask(this, dataService, apiClient),
-//                    intervalTicks, intervalTicks
-//            );
-//            getLogger().info("Periodic sync every " + intervalMinutes + " min -> " + url);
-//        } else {
-//            getLogger().warning("sync.token is not set — periodic sync and player join sync disabled. File dump still works.");
-//        }
-
-        // /sync command — alldata works even without token (file dump mode)
+        // /sync command
         Objects.requireNonNull(getCommand("sync"))
-                .setExecutor(new SyncCommand(this, dataService, apiClient));
+                .setExecutor(new SyncCommand(this, dataService, syncOutput, retryQueue));
 
         getLogger().info("Enabled.");
     }

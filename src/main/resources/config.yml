@@ -1,4 +1,9 @@
 sync:
+  # Output mode: "api" — send to REST API, "file" — write formatted JSON to disk
+  mode: file
   url: "https://beehiveprv.club/api/sync.php"
   token: ""
   interval-minutes: 5
+  # Whether to fall back to Mojang API when skin is not found in SkinsRestorer files.
+  # If false and skin is missing — a WARNING is logged and skin_head is omitted.
+  fetch-mojang-skin: true

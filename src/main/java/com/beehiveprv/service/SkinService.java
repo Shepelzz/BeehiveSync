@@ -20,6 +20,7 @@ import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.util.Base64;
 import java.util.HexFormat;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.logging.Logger;
@@ -34,12 +35,16 @@ public class SkinService {
 
     private final Logger logger;
     private final Path skinsRestorerFolder;
+    private final boolean fetchMojangSkin;
     private final ConcurrentHashMap<UUID, String> cache = new ConcurrentHashMap<>();
+    /** UUIDs where the Mojang API returned an error (not "no skin" — actual failure). */
+    private final Set<UUID> mojangFailed = ConcurrentHashMap.newKeySet();
     private final HttpClient http = HttpClient.newHttpClient();
 
-    public SkinService(Logger logger, Path pluginDataFolder) {
+    public SkinService(Logger logger, Path pluginDataFolder, boolean fetchMojangSkin) {
         this.logger = logger;
         this.skinsRestorerFolder = pluginDataFolder.resolveSibling("SkinsRestorer");
+        this.fetchMojangSkin = fetchMojangSkin;
     }
 
     /**
@@ -47,25 +52,48 @@ public class SkinService {
      * Call from async thread (downloads the skin PNG over HTTP).
      */
     public String buildAndCache(Player player) {
+        // 1. Vanilla profile textures (fastest for online player)
         String head = buildFromProfile(player);
         if (head != null) {
             cache.put(player.getUniqueId(), head);
+            return head;
         }
-        return head;
+        // 2. SkinsRestorer files → Mojang API fallback (via getSkin)
+        return getSkin(player.getUniqueId());
     }
 
     /**
-     * Get skin for any player: in-memory cache first, then SkinsRestorer disk files.
+     * Get skin for any player:
+     * 1. In-memory cache
+     * 2. SkinsRestorer disk files
+     * 3. Mojang Session Server API (fallback, returns default skin if player has none)
+     *
      * Call from async thread.
      */
     public String getSkin(UUID uuid) {
         String cached = cache.get(uuid);
         if (cached != null) return cached;
+
         String fromSR = buildFromSkinsRestorer(uuid);
         if (fromSR != null) {
             cache.put(uuid, fromSR);
+            return fromSR;
         }
-        return fromSR;
+
+        logger.warning("[Skin] No SkinsRestorer skin for " + uuid + ".");
+
+        if (!fetchMojangSkin) {
+            logger.warning("[Skin] fetch-mojang-skin is disabled — skin_head will be omitted for " + uuid + ".");
+            return null;
+        }
+
+        logger.info("[Skin] Trying Mojang API for " + uuid + "...");
+
+        String fromMojang = fetchFromMojang(uuid);
+        if (fromMojang != null) {
+            cache.put(uuid, fromMojang);
+        }
+        return fromMojang;
     }
 
     // ── From online player profile ───────────────────────────────────────
@@ -94,17 +122,24 @@ public class SkinService {
 
     private String buildFromSkinsRestorer(UUID uuid) {
         Path playersFolder = skinsRestorerFolder.resolve("players");
-        Path skinsFolder = skinsRestorerFolder.resolve("skins");
-        Path playerFile = playersFolder.resolve(uuid + ".player");
+        Path skinsFolder   = skinsRestorerFolder.resolve("skins");
+        Path playerFile    = playersFolder.resolve(uuid + ".player");
 
-        if (!Files.exists(playerFile)) return null;
+        if (!Files.exists(playerFile)) {
+            logger.warning("[Skin/SR] Player file not found: " + playerFile);
+            return null;
+        }
         try {
             String content = Files.readString(playerFile, StandardCharsets.UTF_8);
             SkinRef ref = parseSkinRef(content);
-            if (ref == null) return null;
-            return resolveSkinFromRef(skinsFolder, ref);
+            if (ref == null) {
+                logger.warning("[Skin/SR] Could not parse skinIdentifier from " + playerFile);
+                return null;
+            }
+            logger.info("[Skin/SR] Resolved ref for " + uuid + " → type=" + ref.type() + " id=" + ref.identifier());
+            return resolveSkinFromRef(skinsFolder, ref, uuid);
         } catch (Exception e) {
-            logger.warning("Failed to read SR skin for " + uuid + ": " + e.getMessage());
+            logger.warning("[Skin/SR] Error reading player file for " + uuid + ": " + e.getMessage());
             return null;
         }
     }
@@ -126,7 +161,7 @@ public class SkinService {
         return new SkinRef(idM.group(1), typeM.group(1));
     }
 
-    private String resolveSkinFromRef(Path skinsFolder, SkinRef ref) {
+    private String resolveSkinFromRef(Path skinsFolder, SkinRef ref, UUID uuid) {
         Path skinFile = switch (ref.type()) {
             case "PLAYER" -> skinsFolder.resolve(ref.identifier() + ".playerskin");
             case "URL" -> {
@@ -135,21 +170,98 @@ public class SkinService {
                 yield Files.exists(classic) ? classic : skinsFolder.resolve(hash + "_SLIM.urlskin");
             }
             case "CUSTOM" -> skinsFolder.resolve(ref.identifier() + ".customskin");
-            default -> null;
+            default -> {
+                logger.warning("[Skin/SR] Unknown skin type '" + ref.type() + "' for " + uuid);
+                yield null;
+            }
         };
 
-        if (skinFile == null || !Files.exists(skinFile)) return null;
+        if (skinFile == null) return null;
 
+        if (!Files.exists(skinFile)) {
+            logger.warning("[Skin/SR] Skin file not found: " + skinFile);
+            return null;
+        }
+
+        logger.info("[Skin/SR] Reading skin file: " + skinFile);
         try {
             String content = Files.readString(skinFile, StandardCharsets.UTF_8);
             Matcher m = Pattern.compile("\"value\"\\s*:\\s*\"([A-Za-z0-9+/=]+)\"").matcher(content);
-            if (!m.find()) return null;
+            if (!m.find()) {
+                logger.warning("[Skin/SR] No 'value' field in " + skinFile);
+                return null;
+            }
+
+            String skinUrl = extractSkinUrl(m.group(1));
+            if (skinUrl == null) {
+                logger.warning("[Skin/SR] Could not extract SKIN url from value in " + skinFile);
+                return null;
+            }
+            return downloadAndProcess(skinUrl);
+        } catch (Exception e) {
+            logger.warning("[Skin/SR] Error reading skin file " + skinFile + ": " + e.getMessage());
+            return null;
+        }
+    }
+
+    // ── Mojang API fallback ──────────────────────────────────────────────
+
+    /** Whether the last Mojang API call for this UUID resulted in an error (not "no skin"). */
+    public boolean isMojangFailed(UUID uuid) {
+        return mojangFailed.contains(uuid);
+    }
+
+    /**
+     * Fetch skin via Mojang Session Server.
+     * Returns the processed head Base64, or {@code null} if:
+     * <ul>
+     *   <li>API error / rate-limit → sets {@link #isMojangFailed} flag, logs WARNING</li>
+     *   <li>Player has no custom skin (legitimate) → flag NOT set</li>
+     * </ul>
+     * Endpoint: GET https://sessionserver.mojang.com/session/minecraft/profile/{uuid-no-dashes}
+     */
+    public String fetchFromMojang(UUID uuid) {
+        try {
+            String uuidNoDashes = uuid.toString().replace("-", "");
+            String url = "https://sessionserver.mojang.com/session/minecraft/profile/" + uuidNoDashes;
+
+            HttpResponse<String> resp = http.send(
+                    HttpRequest.newBuilder().uri(URI.create(url)).GET().build(),
+                    HttpResponse.BodyHandlers.ofString()
+            );
+
+            int status = resp.statusCode();
+            if (status == 204 || status == 404) {
+                // Player not found in Mojang DB — expected for offline/cracked accounts
+                logger.info("[Skin] Mojang has no profile for " + uuid
+                        + " (HTTP " + status + ") — offline account, no skin.");
+                return null;
+            }
+            if (status != 200) {
+                // Actual error (429 rate-limit, 5xx server error, etc.) — worth retrying
+                mojangFailed.add(uuid);
+                logger.warning("[Skin] Mojang API returned HTTP " + status
+                        + " for " + uuid + " — queued for retry.");
+                return null;
+            }
+
+            // API responded OK — clear any previous failure flag
+            mojangFailed.remove(uuid);
+
+            // Extract base64 textures value from the "textures" property
+            // Response: {"properties":[{"name":"textures","value":"<base64>"}]}
+            Matcher m = Pattern.compile(
+                    "\"name\"\\s*:\\s*\"textures\"[^}]*?\"value\"\\s*:\\s*\"([A-Za-z0-9+/=]+)\""
+            ).matcher(resp.body());
+            if (!m.find()) return null; // no custom skin — legitimate, no retry needed
 
             String skinUrl = extractSkinUrl(m.group(1));
             if (skinUrl == null) return null;
             return downloadAndProcess(skinUrl);
         } catch (Exception e) {
-            logger.warning("Failed to resolve SR skin (" + ref.type() + ":" + ref.identifier() + "): " + e.getMessage());
+            mojangFailed.add(uuid);
+            logger.warning("[Skin] Mojang request failed for " + uuid
+                    + ": " + e.getMessage() + " — queued for retry.");
             return null;
         }
     }
@@ -160,12 +272,9 @@ public class SkinService {
         String json = new String(Base64.getDecoder().decode(base64Textures), StandardCharsets.UTF_8);
         int skinIdx = json.indexOf("\"SKIN\"");
         if (skinIdx == -1) return null;
-        int urlIdx = json.indexOf("\"url\":\"", skinIdx);
-        if (urlIdx == -1) return null;
-        int urlStart = urlIdx + 7;
-        int urlEnd = json.indexOf("\"", urlStart);
-        if (urlEnd == -1) return null;
-        return json.substring(urlStart, urlEnd);
+        Matcher m = Pattern.compile("\"url\"\\s*:\\s*\"([^\"]+)\"").matcher(json);
+        m.region(skinIdx, json.length());
+        return m.find() ? m.group(1) : null;
     }
 
     private String downloadAndProcess(String skinUrl) throws Exception {

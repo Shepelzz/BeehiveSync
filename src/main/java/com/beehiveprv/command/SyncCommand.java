@@ -3,19 +3,15 @@ package com.beehiveprv.command;
 import com.beehiveprv.dto.PlayerData;
 import com.beehiveprv.service.PlayerDataService;
 import com.beehiveprv.service.PlayerDataService.MainThreadExtras;
-import com.beehiveprv.service.SyncApiClient;
+import com.beehiveprv.service.SkinRetryQueue;
+import com.beehiveprv.service.SyncOutputService;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandExecutor;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
 import org.bukkit.plugin.java.JavaPlugin;
 
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
 import java.nio.file.Path;
-import java.time.LocalDateTime;
-import java.time.format.DateTimeFormatter;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -24,57 +20,55 @@ import java.util.concurrent.TimeUnit;
 import java.util.logging.Logger;
 
 /**
- * /sync alldata [file] — collects all players' data and sends to API or dumps to file.
+ * /sync alldata — collects all players' data and routes to the configured output
+ * (REST API or local JSON file), as set by {@code sync.mode} in config.yml.
  */
 public class SyncCommand implements CommandExecutor {
 
-    private static final DateTimeFormatter FILE_TS = DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm-ss");
-
     private final JavaPlugin plugin;
     private final PlayerDataService dataService;
-    private final SyncApiClient apiClient;
+    private final SyncOutputService syncOutput;
+    private final SkinRetryQueue retryQueue;
     private final Logger logger;
 
-    public SyncCommand(JavaPlugin plugin, PlayerDataService dataService, SyncApiClient apiClient) {
+    public SyncCommand(JavaPlugin plugin, PlayerDataService dataService,
+                       SyncOutputService syncOutput, SkinRetryQueue retryQueue) {
         this.plugin = plugin;
         this.dataService = dataService;
-        this.apiClient = apiClient;
+        this.syncOutput = syncOutput;
+        this.retryQueue = retryQueue;
         this.logger = plugin.getLogger();
     }
 
     @Override
     public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
         if (args.length == 0 || !args[0].equalsIgnoreCase("alldata")) {
-            sender.sendMessage("\u00a7eUsage: /sync alldata [file]");
+            sender.sendMessage("\u00a7eUsage: /sync alldata");
             return true;
         }
         if (sender instanceof Player p && !p.isOp()) {
             sender.sendMessage("\u00a7cYou must be OP to use this.");
             return true;
         }
-
-        boolean toFile = args.length >= 2 && args[1].equalsIgnoreCase("file");
-
-        if (!toFile && !apiClient.isConfigured()) {
-            sender.sendMessage("\u00a7cToken not set in config.yml \u2014 can't send to REST. Use \u00a7e/sync alldata file\u00a7c to dump to disk.");
+        if (!syncOutput.isActive()) {
+            sender.sendMessage("\u00a7csync.token is not set in config.yml \u2014 set a token or switch mode to \u00a7efile\u00a7c.");
             return true;
         }
 
-        sender.sendMessage(toFile
+        sender.sendMessage(syncOutput.isFileMode()
                 ? "\u00a7aBuilding full data dump to file..."
-                : "\u00a7aStarting full sync...");
+                : "\u00a7aStarting full sync to API...");
 
         plugin.getServer().getScheduler().runTaskAsynchronously(plugin, () -> {
             try {
                 List<PlayerData> players = collectAllPlayers(sender);
 
-                if (toFile) {
-                    dumpToFile(sender, players);
-                } else {
-                    sender.sendMessage("\u00a7aSending " + players.size() + " players...");
-                    int sent = apiClient.sendPlayers(players);
-                    sender.sendMessage("\u00a7aSync complete! Synced " + sent + "/" + players.size() + " players.");
-                }
+                sender.sendMessage("\u00a77Sending " + players.size() + " players...");
+                int done = syncOutput.syncAll(players);
+
+                sender.sendMessage(syncOutput.isFileMode()
+                        ? "\u00a7aDumped " + done + "/" + players.size() + " players \u2192 players.json"
+                        : "\u00a7aSync complete! Sent " + done + "/" + players.size() + " players.");
             } catch (Exception e) {
                 logger.severe("AllData sync error: " + e.getMessage());
                 sender.sendMessage("\u00a7cSync error: " + e.getMessage());
@@ -84,14 +78,15 @@ public class SyncCommand implements CommandExecutor {
     }
 
     private List<PlayerData> collectAllPlayers(CommandSender feedback) throws Exception {
-        // Main thread: collect online extras + world folder paths
         CompletableFuture<MainThreadResult> future = new CompletableFuture<>();
         plugin.getServer().getScheduler().runTask(plugin, () -> {
             try {
                 Map<UUID, MainThreadExtras> extras = dataService.collectAllMainThreadExtras();
-                Map<UUID, PlayerDataService.PlayerStats> stats = dataService.collectAllPlayerStats();
+                // Only online players — offline players' stats are read from disk below
+                Map<UUID, PlayerDataService.PlayerStats> onlineStats = dataService.collectAllPlayerStats();
                 Path advFolder = dataService.getAdvancementsFolder();
-                future.complete(new MainThreadResult(extras, stats, advFolder));
+                Path statsFolder = dataService.getStatsFolder();
+                future.complete(new MainThreadResult(extras, onlineStats, advFolder, statsFolder));
             } catch (Exception e) {
                 future.completeExceptionally(e);
             }
@@ -99,26 +94,17 @@ public class SyncCommand implements CommandExecutor {
 
         MainThreadResult mtr = future.get(30, TimeUnit.SECONDS);
 
-        // Async: build all player data (disk stats + skins + disk advancements)
         feedback.sendMessage("\u00a77Collecting player data...");
-        List<PlayerData> result = dataService.buildAllPlayerData(mtr.extras(), mtr.stats(), mtr.advFolder());
+        List<PlayerData> result = dataService.buildAllPlayerData(
+                mtr.extras(), mtr.onlineStats(), mtr.advFolder(), mtr.statsFolder(), retryQueue);
         feedback.sendMessage("\u00a77Collected " + result.size() + " players.");
         return result;
     }
 
-    private void dumpToFile(CommandSender sender, List<PlayerData> players) throws Exception {
-        List<String> jsons = new ArrayList<>(players.size());
-        for (PlayerData p : players) {
-            jsons.add(p.toJson());
-        }
-        String payload = "{\"players\":[" + String.join(",", jsons) + "]}";
-
-        plugin.getDataFolder().mkdirs();
-        String filename = LocalDateTime.now().format(FILE_TS) + ".json";
-        Path out = plugin.getDataFolder().toPath().resolve(filename);
-        Files.writeString(out, payload, StandardCharsets.UTF_8);
-        sender.sendMessage("\u00a7aDumped " + players.size() + " players \u2192 " + out);
-    }
-
-    private record MainThreadResult(Map<UUID, MainThreadExtras> extras, Map<UUID, PlayerDataService.PlayerStats> stats, Path advFolder) {}
+    private record MainThreadResult(
+            Map<UUID, MainThreadExtras> extras,
+            Map<UUID, PlayerDataService.PlayerStats> onlineStats,
+            Path advFolder,
+            Path statsFolder
+    ) {}
 }

@@ -15,7 +15,7 @@ import java.util.logging.Logger;
  */
 public class SyncApiClient {
 
-    private static final int BATCH_SIZE = 500;
+    private static final int BATCH_SIZE = 10;
 
     private final Logger logger;
     private final String url;

@@ -2,6 +2,8 @@ name: BeehiveSync
 version: '1.0-SNAPSHOT'
 main: com.beehiveprv.BeehiveSync
 api-version: '1.21'
+softdepend:
+  - LuckPerms
 
 commands:
   sync:
