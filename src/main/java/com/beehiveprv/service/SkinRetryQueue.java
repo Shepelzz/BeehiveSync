@@ -67,7 +67,7 @@ public class SkinRetryQueue {
             UUID uuid = entry.getKey();
             PlayerData old = entry.getValue();
 
-            String skin = skinService.fetchFromMojang(uuid);
+            String skin = skinService.fetchFromMcHeads(uuid);
             if (skin != null) {
                 syncOutput.syncOne(old.withSkin(skin));
                 logger.warning("[SkinRetry] Got skin for " + old.name() + " — re-synced.");

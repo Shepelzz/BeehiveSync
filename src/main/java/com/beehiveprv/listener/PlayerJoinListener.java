@@ -11,6 +11,7 @@ import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.event.player.PlayerJoinEvent;
+import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.plugin.java.JavaPlugin;
 
 import java.util.logging.Logger;
@@ -37,7 +38,7 @@ public class PlayerJoinListener implements Listener {
         this.logger = plugin.getLogger();
     }
 
-    @EventHandler(priority = EventPriority.MONITOR)
+    @EventHandler()
     public void onPlayerJoin(PlayerJoinEvent event) {
         if (!syncOutput.isActive()) {
             logger.fine("Sync not configured, skipping player join sync.");
@@ -60,6 +61,33 @@ public class PlayerJoinListener implements Listener {
                 }
             } catch (Exception e) {
                 logger.warning("Failed to sync player " + player.getName() + " on join: " + e.getMessage());
+            }
+        });
+    }
+
+    @EventHandler()
+    public void onPlayerQuit(PlayerQuitEvent event) {
+        if (!syncOutput.isActive()) {
+            logger.fine("Sync not configured, skipping player quit sync.");
+            return;
+        }
+
+        Player player = event.getPlayer();
+
+        // Collect advancements, permissions, and stats on the main thread
+        MainThreadExtras extras = dataService.collectMainThreadExtras(player);
+        PlayerStats stats = dataService.collectPlayerStats(player);
+
+        // Skin download + output — all async
+        plugin.getServer().getScheduler().runTaskAsynchronously(plugin, () -> {
+            try {
+                String skinHead = skinService.buildAndCache(player);
+                PlayerData data = dataService.buildPlayerData(player, extras, stats, skinHead);
+                if (data != null) {
+                    syncOutput.syncOne(data);
+                }
+            } catch (Exception e) {
+                logger.warning("Failed to sync player " + player.getName() + " on quit: " + e.getMessage());
             }
         });
     }

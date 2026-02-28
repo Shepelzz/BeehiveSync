@@ -30,15 +30,27 @@ import java.util.regex.Pattern;
 /**
  * Handles all skin operations: downloading, cropping, caching,
  * and SkinsRestorer file reading.
+ *
+ * <p>Skin lookup order:
+ * <ol>
+ *   <li>In-memory cache</li>
+ *   <li>SkinsRestorer disk files (raw skin PNG → crop head)</li>
+ *   <li>mc-heads.net API — returns pre-rendered 64x64 head, no cropping needed</li>
+ * </ol>
+ *
+ * <p>{@link #buildAndCache(Player)} for online players additionally tries the
+ * vanilla profile textures first (SkinsRestorer injects its skin there).
  */
 public class SkinService {
+
+    private static final String MC_HEADS_URL = "https://mc-heads.net/avatar/%s/64";
 
     private final Logger logger;
     private final Path skinsRestorerFolder;
     private final boolean fetchMojangSkin;
     private final ConcurrentHashMap<UUID, String> cache = new ConcurrentHashMap<>();
-    /** UUIDs where the Mojang API returned an error (not "no skin" — actual failure). */
-    private final Set<UUID> mojangFailed = ConcurrentHashMap.newKeySet();
+    /** UUIDs where mc-heads.net returned an error (not "no skin" — actual failure). */
+    private final Set<UUID> headFetchFailed = ConcurrentHashMap.newKeySet();
     private final HttpClient http = HttpClient.newHttpClient();
 
     public SkinService(Logger logger, Path pluginDataFolder, boolean fetchMojangSkin) {
@@ -49,25 +61,26 @@ public class SkinService {
 
     /**
      * Build skin head from an online player's profile textures and cache it.
-     * Call from async thread (downloads the skin PNG over HTTP).
+     * Call from async thread (downloads skin PNG over HTTP).
      */
     public String buildAndCache(Player player) {
-        // 1. Vanilla profile textures (fastest for online player)
+        // 1. Vanilla profile (SR injects its skin here for online players)
         String head = buildFromProfile(player);
         if (head != null) {
             cache.put(player.getUniqueId(), head);
             return head;
         }
-        // 2. SkinsRestorer files → Mojang API fallback (via getSkin)
+        // 2. SkinsRestorer files → mc-heads.net fallback (via getSkin)
         return getSkin(player.getUniqueId());
     }
 
     /**
      * Get skin for any player:
-     * 1. In-memory cache
-     * 2. SkinsRestorer disk files
-     * 3. Mojang Session Server API (fallback, returns default skin if player has none)
-     *
+     * <ol>
+     *   <li>In-memory cache</li>
+     *   <li>SkinsRestorer disk files</li>
+     *   <li>mc-heads.net (if {@code fetch-mojang-skin: true} in config)</li>
+     * </ol>
      * Call from async thread.
      */
     public String getSkin(UUID uuid) {
@@ -83,17 +96,22 @@ public class SkinService {
         logger.warning("[Skin] No SkinsRestorer skin for " + uuid + ".");
 
         if (!fetchMojangSkin) {
-            logger.warning("[Skin] fetch-mojang-skin is disabled — skin_head will be omitted for " + uuid + ".");
+            logger.warning("[Skin] fetch-mojang-skin is disabled — skin_head will be default for " + uuid + ".");
             return null;
         }
 
-        logger.info("[Skin] Trying Mojang API for " + uuid + "...");
+        logger.info("[Skin] Trying mc-heads.net for " + uuid + "...");
 
-        String fromMojang = fetchFromMojang(uuid);
-        if (fromMojang != null) {
-            cache.put(uuid, fromMojang);
+        String head = fetchFromMcHeads(uuid);
+        if (head != null) {
+            cache.put(uuid, head);
         }
-        return fromMojang;
+        return head;
+    }
+
+    /** Whether the last mc-heads.net call for this UUID resulted in a network/server error. */
+    public boolean isMojangFailed(UUID uuid) {
+        return headFetchFailed.contains(uuid);
     }
 
     // ── From online player profile ───────────────────────────────────────
@@ -155,7 +173,7 @@ public class SkinService {
         if (closeBrace == -1) return null;
 
         String block = content.substring(openBrace, closeBrace + 1);
-        Matcher idM = Pattern.compile("\"identifier\"\\s*:\\s*\"([^\"]+)\"").matcher(block);
+        Matcher idM   = Pattern.compile("\"identifier\"\\s*:\\s*\"([^\"]+)\"").matcher(block);
         Matcher typeM = Pattern.compile("\"type\"\\s*:\\s*\"([^\"]+)\"").matcher(block);
         if (!idM.find() || !typeM.find()) return null;
         return new SkinRef(idM.group(1), typeM.group(1));
@@ -191,7 +209,6 @@ public class SkinService {
                 logger.warning("[Skin/SR] No 'value' field in " + skinFile);
                 return null;
             }
-
             String skinUrl = extractSkinUrl(m.group(1));
             if (skinUrl == null) {
                 logger.warning("[Skin/SR] Could not extract SKIN url from value in " + skinFile);
@@ -204,69 +221,42 @@ public class SkinService {
         }
     }
 
-    // ── Mojang API fallback ──────────────────────────────────────────────
-
-    /** Whether the last Mojang API call for this UUID resulted in an error (not "no skin"). */
-    public boolean isMojangFailed(UUID uuid) {
-        return mojangFailed.contains(uuid);
-    }
+    // ── mc-heads.net fallback ─────────────────────────────────────────────
 
     /**
-     * Fetch skin via Mojang Session Server.
-     * Returns the processed head Base64, or {@code null} if:
-     * <ul>
-     *   <li>API error / rate-limit → sets {@link #isMojangFailed} flag, logs WARNING</li>
-     *   <li>Player has no custom skin (legitimate) → flag NOT set</li>
-     * </ul>
-     * Endpoint: GET https://sessionserver.mojang.com/session/minecraft/profile/{uuid-no-dashes}
+     * Fetch a pre-rendered 64x64 head from mc-heads.net.
+     * Returns Base64-encoded PNG, or {@code null} on error (sets retry flag).
+     * For offline/cracked accounts, mc-heads.net returns the default Steve/Alex head (HTTP 200).
      */
-    public String fetchFromMojang(UUID uuid) {
+    public String fetchFromMcHeads(UUID uuid) {
         try {
-            String uuidNoDashes = uuid.toString().replace("-", "");
-            String url = "https://sessionserver.mojang.com/session/minecraft/profile/" + uuidNoDashes;
+            String url = String.format(MC_HEADS_URL, uuid.toString().replace("-", ""));
 
-            HttpResponse<String> resp = http.send(
+            HttpResponse<byte[]> resp = http.send(
                     HttpRequest.newBuilder().uri(URI.create(url)).GET().build(),
-                    HttpResponse.BodyHandlers.ofString()
+                    HttpResponse.BodyHandlers.ofByteArray()
             );
 
             int status = resp.statusCode();
-            if (status == 204 || status == 404) {
-                // Player not found in Mojang DB — expected for offline/cracked accounts
-                logger.info("[Skin] Mojang has no profile for " + uuid
-                        + " (HTTP " + status + ") — offline account, no skin.");
-                return null;
-            }
             if (status != 200) {
-                // Actual error (429 rate-limit, 5xx server error, etc.) — worth retrying
-                mojangFailed.add(uuid);
-                logger.warning("[Skin] Mojang API returned HTTP " + status
+                headFetchFailed.add(uuid);
+                logger.warning("[Skin] mc-heads.net returned HTTP " + status
                         + " for " + uuid + " — queued for retry.");
                 return null;
             }
 
-            // API responded OK — clear any previous failure flag
-            mojangFailed.remove(uuid);
-
-            // Extract base64 textures value from the "textures" property
-            // Response: {"properties":[{"name":"textures","value":"<base64>"}]}
-            Matcher m = Pattern.compile(
-                    "\"name\"\\s*:\\s*\"textures\"[^}]*?\"value\"\\s*:\\s*\"([A-Za-z0-9+/=]+)\""
-            ).matcher(resp.body());
-            if (!m.find()) return null; // no custom skin — legitimate, no retry needed
-
-            String skinUrl = extractSkinUrl(m.group(1));
-            if (skinUrl == null) return null;
-            return downloadAndProcess(skinUrl);
+            headFetchFailed.remove(uuid);
+            logger.info("[Skin] Got head from mc-heads.net for " + uuid + ".");
+            return Base64.getEncoder().encodeToString(resp.body());
         } catch (Exception e) {
-            mojangFailed.add(uuid);
-            logger.warning("[Skin] Mojang request failed for " + uuid
+            headFetchFailed.add(uuid);
+            logger.warning("[Skin] mc-heads.net request failed for " + uuid
                     + ": " + e.getMessage() + " — queued for retry.");
             return null;
         }
     }
 
-    // ── Shared skin processing ───────────────────────────────────────────
+    // ── Shared skin processing (for raw skin PNGs from SR) ───────────────
 
     private String extractSkinUrl(String base64Textures) {
         String json = new String(Base64.getDecoder().decode(base64Textures), StandardCharsets.UTF_8);
@@ -277,6 +267,7 @@ public class SkinService {
         return m.find() ? m.group(1) : null;
     }
 
+    /** Download a raw Minecraft skin PNG and crop/scale the head region to 64x64. */
     private String downloadAndProcess(String skinUrl) throws Exception {
         HttpResponse<byte[]> resp = http.send(
                 HttpRequest.newBuilder().uri(URI.create(skinUrl)).GET().build(),
@@ -287,14 +278,14 @@ public class SkinService {
         BufferedImage skin = ImageIO.read(new ByteArrayInputStream(resp.body()));
         if (skin == null) return null;
 
-        // Crop face: base layer (8,8,8,8) + overlay (40,8,8,8)
+        // Crop face: base layer (8,8) + overlay (40,8), both 8x8
         BufferedImage face = new BufferedImage(8, 8, BufferedImage.TYPE_INT_ARGB);
         Graphics2D g = face.createGraphics();
         g.drawImage(skin.getSubimage(8, 8, 8, 8), 0, 0, null);
         g.drawImage(skin.getSubimage(40, 8, 8, 8), 0, 0, null);
         g.dispose();
 
-        // Scale 8x8 -> 64x64 nearest neighbor
+        // Scale 8x8 → 64x64 nearest-neighbor (pixel-perfect)
         BufferedImage scaled = new BufferedImage(64, 64, BufferedImage.TYPE_INT_ARGB);
         Graphics2D g2 = scaled.createGraphics();
         g2.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_NEAREST_NEIGHBOR);
