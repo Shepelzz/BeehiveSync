@@ -100,7 +100,7 @@ public class SkinService {
             return null;
         }
 
-        logger.info("[Skin] Trying mc-heads.net for " + uuid + "...");
+//        logger.info("[Skin] Trying mc-heads.net for " + uuid + "...");
 
         String head = fetchFromMcHeads(uuid);
         if (head != null) {

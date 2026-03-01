@@ -55,7 +55,7 @@ public class PlayerJoinListener implements Listener {
         plugin.getServer().getScheduler().runTaskAsynchronously(plugin, () -> {
             try {
                 String skinHead = skinService.buildAndCache(player);
-                PlayerData data = dataService.buildPlayerData(player, extras, stats, skinHead);
+                PlayerData data = dataService.buildPlayerData(player, extras, stats, skinHead, true);
                 if (data != null) {
                     syncOutput.syncOne(data);
                 }
@@ -82,7 +82,7 @@ public class PlayerJoinListener implements Listener {
         plugin.getServer().getScheduler().runTaskAsynchronously(plugin, () -> {
             try {
                 String skinHead = skinService.buildAndCache(player);
-                PlayerData data = dataService.buildPlayerData(player, extras, stats, skinHead);
+                PlayerData data = dataService.buildPlayerData(player, extras, stats, skinHead, false);
                 if (data != null) {
                     syncOutput.syncOne(data);
                 }

@@ -15,8 +15,8 @@ public record PlayerData(
         boolean admin,
         int kills,
         int deaths,
-        double distanceKm
-) {
+        double distanceKm,
+        boolean online) {
 
     private static final String DEFAULT_SKIN_HEAD =
             "iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAACXBIWXMAAA7EAAAOxAGVKw4bAAAB10lEQVR4nO2bsU7CUBiFb9sLpRpEEyMMJPoGvoBhNCaOujuQ6OAjGJ2NxsXFxSfQGAcd1IHBzVfQBEGJykBISJEUWurKdG6Iwxnu\\/61fezkc\\/uS2TXFWV\\/KpAsRjZJXSjgt9lMTQx3ECvevi9TPagz6F304pvLoFSAHsAGykAHYANlIAOwAbbdrnTcQpXmA2l4W+kHWgTxTe5zthhM9PDdcZ0FqAFMAOwEYKYAdgIwWwA7DRpgNO93eg9zN4nw9yc9AP+j0cwMO\\/UffnC\\/rj2wforZ8AKYAdgI0UwA7ARgpgB2DjXB3uwifnM74PF\\/iN8P245+Hzu70u9MvFJeibjVfoTVg\\/AVIAOwAbKYAdgI0UwA7ARpv2+c2Dc+i3KifQVyt16E37\\/MV9Efqb5zPor4\\/2oLd+AqQAdgA2UgA7ABspgB2AjXNZXYfPA4qlMlxA+\\/PQ39Vq06eaYHtjDfrWxxv09XYHeusnQApgB2AjBbADsJEC2AHY6HCE36MbtvD9fPOzD33ezUwdapLHpxfoS+UAekfhz7d+AqQAdgA2UgA7ABspgB2AjX7\\/bsMDxmP8f4DFhcK\\/AkSjIfSBn4M+HODrGNP61k+AFMAOwEYKYAdgIwWwA7D5A\\/UbWiy89EeuAAAAAElFTkSuQmCC";
@@ -40,7 +40,8 @@ public record PlayerData(
         sb.append("\"is_admin\":").append(admin).append(',');
         sb.append("\"kills\":").append(kills).append(',');
         sb.append("\"deaths\":").append(deaths).append(',');
-        sb.append("\"distance_km\":").append(String.format(Locale.US, "%.2f", distanceKm));
+        sb.append("\"distance_km\":").append(String.format(Locale.US, "%.2f", distanceKm)).append(',');
+        sb.append("\"is_online\":").append(online);
         sb.append('}');
         return sb.toString();
     }
@@ -65,7 +66,8 @@ public record PlayerData(
         sb.append(indent).append("\"is_admin\": ").append(admin).append(",\n");
         sb.append(indent).append("\"kills\": ").append(kills).append(",\n");
         sb.append(indent).append("\"deaths\": ").append(deaths).append(",\n");
-        sb.append(indent).append("\"distance_km\": ").append(String.format(Locale.US, "%.2f", distanceKm)).append("\n");
+        sb.append(indent).append("\"distance_km\": ").append(String.format(Locale.US, "%.2f", distanceKm)).append(",\n");
+        sb.append(indent).append("\"is_online\": ").append(online).append("\n");
         sb.append(base).append("}");
         return sb.toString();
     }
@@ -78,7 +80,7 @@ public record PlayerData(
     /** Return a copy of this record with a different skinHead. */
     public PlayerData withSkin(String skinHead) {
         return new PlayerData(uuid, name, skinHead, playtimeMinutes, achievements,
-                sponsor, banned, moderator, admin, kills, deaths, distanceKm);
+                sponsor, banned, moderator, admin, kills, deaths, distanceKm, online);
     }
 
     private static String escapeJson(String s) {

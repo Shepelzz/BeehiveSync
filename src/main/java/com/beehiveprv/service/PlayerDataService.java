@@ -146,7 +146,7 @@ public class PlayerDataService {
     // ── PlayerData building (any thread) ─────────────────────────────────
 
     public PlayerData buildPlayerData(OfflinePlayer player, MainThreadExtras extras,
-                                      PlayerStats stats, String skinHead) {
+                                      PlayerStats stats, String skinHead, boolean online) {
         String name = player.getName();
         if (name == null) return null;
 
@@ -162,7 +162,8 @@ public class PlayerDataService {
                 extras != null && extras.admin(),
                 stats.kills(),
                 stats.deaths(),
-                stats.distanceCm() / 100_000.0
+                stats.distanceCm() / 100_000.0,
+                online
         );
     }
 
@@ -199,8 +200,9 @@ public class PlayerDataService {
             }
 
             // Stats: online → Bukkit API (in memory, accurate); offline → disk file
+            boolean online = onlineStats.containsKey(uuid);
             PlayerStats stats;
-            if (onlineStats.containsKey(uuid)) {
+            if (online) {
                 stats = onlineStats.get(uuid);
             } else {
                 stats = readStatsFromDisk(statsFolder, uuid);
@@ -209,7 +211,7 @@ public class PlayerDataService {
             if (stats.playtimeTicks() == 0) continue;
 
             String skin = skinService.getSkin(uuid);
-            PlayerData data = buildPlayerData(op, extras, stats, skin);
+            PlayerData data = buildPlayerData(op, extras, stats, skin, online);
             if (data == null) continue;
 
             // If Mojang API errored (not "player has no skin"), queue for retry
