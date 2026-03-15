@@ -73,7 +73,7 @@ public class PlayerDataService {
         return new MainThreadExtras(
                 adv,
                 player.hasPermission("group.sponsor"),
-                player.hasPermission("group.moderator"),
+                player.hasPermission("group.moderator") || player.hasPermission("group.moderator_light"),
                 player.hasPermission("group.admin") || player.hasPermission("group.owner")
         );
     }

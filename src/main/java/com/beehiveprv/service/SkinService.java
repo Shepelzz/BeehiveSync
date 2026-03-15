@@ -59,19 +59,40 @@ public class SkinService {
         this.fetchMojangSkin = fetchMojangSkin;
     }
 
+    public record SkinResult(String head, String source) {}
+
     /**
      * Build skin head from an online player's profile textures and cache it.
+     * Returns the head and the source it came from.
      * Call from async thread (downloads skin PNG over HTTP).
      */
-    public String buildAndCache(Player player) {
+    public SkinResult buildAndCache(Player player) {
+        UUID uuid = player.getUniqueId();
         // 1. Vanilla profile (SR injects its skin here for online players)
         String head = buildFromProfile(player);
         if (head != null) {
-            cache.put(player.getUniqueId(), head);
-            return head;
+            cache.put(uuid, head);
+            return new SkinResult(head, "profile");
         }
-        // 2. SkinsRestorer files → mc-heads.net fallback (via getSkin)
-        return getSkin(player.getUniqueId());
+        // 2. In-memory cache
+        String cached = cache.get(uuid);
+        if (cached != null) return new SkinResult(cached, "cache");
+        // 3. SkinsRestorer files
+        String fromSR = buildFromSkinsRestorer(uuid);
+        if (fromSR != null) {
+            cache.put(uuid, fromSR);
+            return new SkinResult(fromSR, "SkinsRestorer");
+        }
+        // 4. mc-heads.net
+        if (!fetchMojangSkin) {
+            return new SkinResult(null, "none");
+        }
+        String fromMcHeads = fetchFromMcHeads(uuid);
+        if (fromMcHeads != null) {
+            cache.put(uuid, fromMcHeads);
+            return new SkinResult(fromMcHeads, "mc-heads.net");
+        }
+        return new SkinResult(null, "none");
     }
 
     /**
@@ -93,14 +114,9 @@ public class SkinService {
             return fromSR;
         }
 
-        logger.warning("[Skin] No SkinsRestorer skin for " + uuid + ".");
-
         if (!fetchMojangSkin) {
-            logger.warning("[Skin] fetch-mojang-skin is disabled — skin_head will be default for " + uuid + ".");
             return null;
         }
-
-//        logger.info("[Skin] Trying mc-heads.net for " + uuid + "...");
 
         String head = fetchFromMcHeads(uuid);
         if (head != null) {
@@ -144,7 +160,6 @@ public class SkinService {
         Path playerFile    = playersFolder.resolve(uuid + ".player");
 
         if (!Files.exists(playerFile)) {
-            logger.warning("[Skin/SR] Player file not found: " + playerFile);
             return null;
         }
         try {
@@ -154,7 +169,6 @@ public class SkinService {
                 logger.warning("[Skin/SR] Could not parse skinIdentifier from " + playerFile);
                 return null;
             }
-            logger.info("[Skin/SR] Resolved ref for " + uuid + " → type=" + ref.type() + " id=" + ref.identifier());
             return resolveSkinFromRef(skinsFolder, ref, uuid);
         } catch (Exception e) {
             logger.warning("[Skin/SR] Error reading player file for " + uuid + ": " + e.getMessage());
@@ -196,12 +210,8 @@ public class SkinService {
 
         if (skinFile == null) return null;
 
-        if (!Files.exists(skinFile)) {
-            logger.warning("[Skin/SR] Skin file not found: " + skinFile);
-            return null;
-        }
+        if (!Files.exists(skinFile)) return null;
 
-        logger.info("[Skin/SR] Reading skin file: " + skinFile);
         try {
             String content = Files.readString(skinFile, StandardCharsets.UTF_8);
             Matcher m = Pattern.compile("\"value\"\\s*:\\s*\"([A-Za-z0-9+/=]+)\"").matcher(content);
@@ -246,7 +256,6 @@ public class SkinService {
             }
 
             headFetchFailed.remove(uuid);
-            logger.info("[Skin] Got head from mc-heads.net for " + uuid + ".");
             return Base64.getEncoder().encodeToString(resp.body());
         } catch (Exception e) {
             headFetchFailed.add(uuid);

@@ -54,23 +54,21 @@ public class PlayerJoinListener implements Listener {
         // Skin download + output — all async
         plugin.getServer().getScheduler().runTaskAsynchronously(plugin, () -> {
             try {
-                String skinHead = skinService.buildAndCache(player);
-                PlayerData data = dataService.buildPlayerData(player, extras, stats, skinHead, true);
+                SkinService.SkinResult skinResult = skinService.buildAndCache(player);
+                PlayerData data = dataService.buildPlayerData(player, extras, stats, skinResult.head(), true);
                 if (data != null) {
                     syncOutput.syncOne(data);
+                    logger.info("Synced " + player.getName() + " (join) — skin: " + skinResult.source());
                 }
             } catch (Exception e) {
-                logger.warning("Failed to sync player " + player.getName() + " on join: " + e.getMessage());
+                logger.severe("Failed to sync player " + player.getName() + " on join: " + e.getMessage());
             }
         });
     }
 
     @EventHandler()
     public void onPlayerQuit(PlayerQuitEvent event) {
-        if (!syncOutput.isActive()) {
-            logger.fine("Sync not configured, skipping player quit sync.");
-            return;
-        }
+        if (!syncOutput.isActive()) return;
 
         Player player = event.getPlayer();
 
@@ -81,13 +79,14 @@ public class PlayerJoinListener implements Listener {
         // Skin download + output — all async
         plugin.getServer().getScheduler().runTaskAsynchronously(plugin, () -> {
             try {
-                String skinHead = skinService.buildAndCache(player);
-                PlayerData data = dataService.buildPlayerData(player, extras, stats, skinHead, false);
+                SkinService.SkinResult skinResult = skinService.buildAndCache(player);
+                PlayerData data = dataService.buildPlayerData(player, extras, stats, skinResult.head(), false);
                 if (data != null) {
                     syncOutput.syncOne(data);
+                    logger.info("Synced " + player.getName() + " (quit) — skin: " + skinResult.source());
                 }
             } catch (Exception e) {
-                logger.warning("Failed to sync player " + player.getName() + " on quit: " + e.getMessage());
+                logger.severe("Failed to sync player " + player.getName() + " on quit: " + e.getMessage());
             }
         });
     }

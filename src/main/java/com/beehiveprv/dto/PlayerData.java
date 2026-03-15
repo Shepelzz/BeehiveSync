@@ -31,7 +31,7 @@ public record PlayerData(
         sb.append('{');
         sb.append("\"uuid\":\"").append(uuid).append("\",");
         sb.append("\"name\":\"").append(escapeJson(name)).append("\",");
-        sb.append("\"skin_head\":\"").append(effectiveSkin()).append("\",");
+        sb.append("\"skin_head\":\"").append(skinHead).append("\",");
         sb.append("\"playtime_minutes\":").append(playtimeMinutes).append(',');
         sb.append("\"achievements\":").append(achievements).append(',');
         sb.append("\"is_sponsor\":").append(sponsor).append(',');
@@ -57,7 +57,7 @@ public record PlayerData(
         sb.append("{\n");
         sb.append(indent).append("\"uuid\": \"").append(uuid).append("\",\n");
         sb.append(indent).append("\"name\": \"").append(escapeJson(name)).append("\",\n");
-        sb.append(indent).append("\"skin_head\": \"").append(effectiveSkin()).append("\",\n");
+        sb.append(indent).append("\"skin_head\": \"").append(skinHead).append("\",\n");
         sb.append(indent).append("\"playtime_minutes\": ").append(playtimeMinutes).append(",\n");
         sb.append(indent).append("\"achievements\": ").append(achievements).append(",\n");
         sb.append(indent).append("\"is_sponsor\": ").append(sponsor).append(",\n");
