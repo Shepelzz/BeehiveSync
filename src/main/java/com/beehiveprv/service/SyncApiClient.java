@@ -51,6 +51,32 @@ public class SyncApiClient {
         return sent;
     }
 
+    /**
+     * Tells the site to reset all players' online status to offline.
+     * Called on plugin enable to clear stale online states.
+     */
+    public void resetOnline() {
+        if (!isConfigured()) return;
+        try {
+            String resetUrl = url.replace("sync.php", "reset_online.php");
+            HttpRequest req = HttpRequest.newBuilder()
+                    .uri(URI.create(resetUrl))
+                    .header("Content-Type", "application/json")
+                    .header("Authorization", "Bearer " + token)
+                    .POST(HttpRequest.BodyPublishers.noBody())
+                    .build();
+
+            HttpResponse<String> resp = http.send(req, HttpResponse.BodyHandlers.ofString());
+            if (resp.statusCode() == 200) {
+                logger.info("Reset online statuses: " + resp.body());
+            } else {
+                logger.warning("Reset online failed [" + resp.statusCode() + "]: " + resp.body());
+            }
+        } catch (Exception e) {
+            logger.warning("Reset online HTTP error: " + e.getMessage());
+        }
+    }
+
     private boolean sendBatch(List<PlayerData> batch) {
         try {
             List<String> jsons = new ArrayList<>(batch.size());

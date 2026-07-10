@@ -28,6 +28,10 @@ public final class BeehiveSync extends JavaPlugin {
         // Services
         SkinService skinService = new SkinService(getLogger(), getDataFolder().toPath(), fetchMojangSkin);
         SyncApiClient apiClient = new SyncApiClient(getLogger(), url, token);
+
+        // Reset all online statuses on startup to clear stale states
+        getServer().getScheduler().runTaskAsynchronously(this, apiClient::resetOnline);
+
         LuckPermsService luckPerms = new LuckPermsService(getLogger());
         PlayerDataService dataService = new PlayerDataService(getLogger(), skinService, luckPerms);
         SyncOutputService syncOutput = new SyncOutputService(
