@@ -29,13 +29,22 @@ public final class BeehiveSync extends JavaPlugin {
         SkinService skinService = new SkinService(getLogger(), getDataFolder().toPath(), fetchMojangSkin);
         SyncApiClient apiClient = new SyncApiClient(getLogger(), url, token);
 
-        // Reset all online statuses on startup to clear stale states
-        getServer().getScheduler().runTaskAsynchronously(this, apiClient::resetOnline);
-
         LuckPermsService luckPerms = new LuckPermsService(getLogger());
         PlayerDataService dataService = new PlayerDataService(getLogger(), skinService, luckPerms);
         SyncOutputService syncOutput = new SyncOutputService(
                 getLogger(), fileMode, apiClient, getDataFolder().toPath());
+
+        // On startup: clear stale online states and push full role lists,
+        // so bans / roles removed while the plugin was off don't stay on the site
+        getServer().getScheduler().runTaskAsynchronously(this, () -> {
+            apiClient.resetOnline();
+            if (!syncOutput.isActive()) return;
+            try {
+                syncOutput.syncRoles(dataService.collectRoleLists());
+            } catch (Exception e) {
+                getLogger().warning("Startup roles sync error: " + e.getMessage());
+            }
+        });
 
         getLogger().info("Output mode: " + (fileMode ? "file" : "api"));
 

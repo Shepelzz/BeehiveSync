@@ -86,6 +86,26 @@ Authorization: Bearer <TOKEN>
 | 405 | `{"error": "Method not allowed"}` | Не POST |
 | 500 | `{"error": "Server misconfigured"}` | Нет config.local.php или токен не задан |
 
+## Снимок ролей (при старте плагина)
+
+```
+POST https://beehiveprv.club/api/roles.php
+Authorization: Bearer <TOKEN>
+```
+
+```json
+{
+  "banned":     ["069a79f4-44e9-4726-a5be-fca90e38aaf5"],
+  "admins":     [],
+  "moderators": [],
+  "sponsors":   []
+}
+```
+
+Полные списки по всем известным игрокам. Сайт выставляет `is_banned` / `is_admin` / `is_moderator` / `is_sponsor` строго по ним: кого нет в списке — флаг сбрасывается. Так снятые баны и роли не висят на сайте. Все четыре ключа обязательны; `updated_at` не меняется.
+
+Ответ: `{"ok": true, "changed": 3, "received": {"banned": 1, "admins": 0, "moderators": 0, "sponsors": 0}}`
+
 ## Получение скина головы
 
 Плагин должен:
@@ -142,24 +162,13 @@ sync:
 ```
 
 ### Определение ролей
-Через LuckPerms API или Vault permissions:
-```java
-boolean isSponsor = player.hasPermission("group.sponsor");
-boolean isModerator = player.hasPermission("group.moderator");
-boolean isAdmin = player.hasPermission("group.admin") || player.hasPermission("group.owner");
-boolean isBanned = Bukkit.getBanList(BanList.Type.NAME).isBanned(player.getName());
-```
+Только по группам LuckPerms (`getInheritedGroups`), не через `hasPermission` — у OP любая неопределённая пермишка `true`, и он светился бы на сайте админом.
+- `is_sponsor` — группа `sponsor`
+- `is_moderator` — `moderator` или `moderator_light`
+- `is_admin` — `admin`, `admin_light` или `owner`
+- `is_banned` — `OfflinePlayer.isBanned()`
 
-### Адвансменты
-```java
-int count = 0;
-Iterator<Advancement> it = Bukkit.advancementIterator();
-while (it.hasNext()) {
-    Advancement adv = it.next();
-    if (player.getAdvancementProgress(adv).isDone()) count++;
-}
-или как-то по человечески без перебора....
-```
+Без LuckPerms считаются только явно выставленные `group.*` (`isPermissionSet && hasPermission`).
 
 ### HTTP-клиент
 Использовать `java.net.http.HttpClient` (Java 11+):

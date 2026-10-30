@@ -1,6 +1,7 @@
 package com.beehiveprv.service;
 
 import com.beehiveprv.dto.PlayerData;
+import com.beehiveprv.dto.RoleLists;
 import org.bukkit.Bukkit;
 import org.bukkit.OfflinePlayer;
 import org.bukkit.Statistic;
@@ -70,12 +71,8 @@ public class PlayerDataService {
                 if (player.getAdvancementProgress(a).isDone()) adv++;
             } catch (Exception ignored) {}
         }
-        return new MainThreadExtras(
-                adv,
-                player.hasPermission("group.sponsor"),
-                player.hasPermission("group.moderator") || player.hasPermission("group.moderator_light"),
-                player.hasPermission("group.admin") || player.hasPermission("group.owner")
-        );
+        LuckPermsService.PermsResult perms = luckPerms.permsOf(player);
+        return new MainThreadExtras(adv, perms.sponsor(), perms.moderator(), perms.admin());
     }
 
     public Map<UUID, MainThreadExtras> collectAllMainThreadExtras() {
@@ -88,12 +85,8 @@ public class PlayerDataService {
                     if (p.getAdvancementProgress(a).isDone()) adv++;
                 } catch (Exception ignored) {}
             }
-            map.put(p.getUniqueId(), new MainThreadExtras(
-                    adv,
-                    p.hasPermission("group.sponsor"),
-                    p.hasPermission("group.moderator"),
-                    p.hasPermission("group.admin") || p.hasPermission("group.owner")
-            ));
+            LuckPermsService.PermsResult perms = luckPerms.permsOf(p);
+            map.put(p.getUniqueId(), new MainThreadExtras(adv, perms.sponsor(), perms.moderator(), perms.admin()));
         }
         return map;
     }
@@ -223,6 +216,28 @@ public class PlayerDataService {
         }
 
         return result;
+    }
+
+    /**
+     * Collect banned / admin / moderator / sponsor lists for ALL known players.
+     * Roles come from LuckPerms storage, so this loads every user — call from an async thread.
+     */
+    public RoleLists collectRoleLists() {
+        List<UUID> banned = new ArrayList<>();
+        List<UUID> admins = new ArrayList<>();
+        List<UUID> moderators = new ArrayList<>();
+        List<UUID> sponsors = new ArrayList<>();
+
+        for (OfflinePlayer op : Bukkit.getOfflinePlayers()) {
+            UUID uuid = op.getUniqueId();
+            if (op.isBanned()) banned.add(uuid);
+
+            LuckPermsService.PermsResult perms = luckPerms.queryPerms(uuid);
+            if (perms.admin()) admins.add(uuid);
+            if (perms.moderator()) moderators.add(uuid);
+            if (perms.sponsor()) sponsors.add(uuid);
+        }
+        return new RoleLists(banned, admins, moderators, sponsors);
     }
 
     // ── Disk-based stats reading ──────────────────────────────────────────

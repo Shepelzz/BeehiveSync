@@ -1,6 +1,7 @@
 package com.beehiveprv.service;
 
 import com.beehiveprv.dto.PlayerData;
+import com.beehiveprv.dto.RoleLists;
 
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -21,6 +22,7 @@ import java.util.logging.Logger;
  * <ul>
  *   <li>{@code plugins/BeehiveSync/players.json} — full dump from {@code /sync alldata}</li>
  *   <li>{@code plugins/BeehiveSync/players/{uuid}.json} — per-player file updated on join</li>
+ *   <li>{@code plugins/BeehiveSync/roles.json} — role snapshot written on startup</li>
  * </ul>
  */
 public class SyncOutputService {
@@ -81,6 +83,24 @@ public class SyncOutputService {
             }
         } else {
             apiClient.sendPlayers(List.of(player));
+        }
+    }
+
+    /**
+     * Sync the full role snapshot — called on plugin startup.
+     */
+    public void syncRoles(RoleLists roles) {
+        if (fileMode) {
+            try {
+                dataFolder.toFile().mkdirs();
+                Path out = dataFolder.resolve("roles.json");
+                Files.writeString(out, roles.toJson(), StandardCharsets.UTF_8);
+                logger.info("Wrote roles -> " + out);
+            } catch (Exception e) {
+                logger.warning("Failed to write roles.json: " + e.getMessage());
+            }
+        } else {
+            apiClient.sendRoles(roles);
         }
     }
 

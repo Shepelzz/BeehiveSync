@@ -4,6 +4,7 @@ import net.luckperms.api.LuckPerms;
 import net.luckperms.api.LuckPermsProvider;
 import net.luckperms.api.model.user.User;
 import net.luckperms.api.query.QueryOptions;
+import org.bukkit.entity.Player;
 
 import java.util.Set;
 import java.util.UUID;
@@ -11,10 +12,16 @@ import java.util.logging.Logger;
 import java.util.stream.Collectors;
 
 /**
- * Queries LuckPerms for offline player group membership.
+ * Resolves site roles from LuckPerms group membership.
  * Falls back gracefully (all false) if LuckPerms is not installed.
  *
- * <p>Groups checked: {@code sponsor}, {@code moderator}, {@code admin}, {@code owner}.
+ * <p>Roles are taken from groups only — never from {@code hasPermission}, because OPs
+ * pass every undefined permission check and would show up on the site as staff.
+ * <ul>
+ *   <li>sponsor   — {@code sponsor}</li>
+ *   <li>moderator — {@code moderator}, {@code moderator_light}</li>
+ *   <li>admin     — {@code admin}, {@code admin_light}, {@code owner}</li>
+ * </ul>
  */
 public class LuckPermsService {
 
@@ -42,6 +49,23 @@ public class LuckPermsService {
     }
 
     /**
+     * Roles of an online player. LuckPerms keeps online users loaded, so this is safe
+     * on the main thread. Without LuckPerms only explicitly set {@code group.*} permissions count.
+     */
+    public PermsResult permsOf(Player player) {
+        if (api == null) {
+            return new PermsResult(
+                    explicit(player, "group.sponsor"),
+                    explicit(player, "group.moderator") || explicit(player, "group.moderator_light"),
+                    explicit(player, "group.admin") || explicit(player, "group.admin_light")
+                            || explicit(player, "group.owner")
+            );
+        }
+        User user = api.getUserManager().getUser(player.getUniqueId());
+        return user != null ? fromUser(user) : queryPerms(player.getUniqueId());
+    }
+
+    /**
      * Load a player's LuckPerms data and return their group membership.
      * Safe to call from any async thread.
      *
@@ -56,16 +80,7 @@ public class LuckPermsService {
             User user = api.getUserManager().loadUser(uuid).join();
             if (user == null) return PermsResult.EMPTY;
 
-            Set<String> groups = user.getInheritedGroups(QueryOptions.nonContextual())
-                    .stream()
-                    .map(g -> g.getName().toLowerCase())
-                    .collect(Collectors.toSet());
-
-            PermsResult result = new PermsResult(
-                    groups.contains("sponsor"),
-                    groups.contains("moderator"),
-                    groups.contains("admin") || groups.contains("owner")
-            );
+            PermsResult result = fromUser(user);
 
             // Remove from cache if we loaded them (they're offline and weren't cached before)
             if (!alreadyLoaded) {
@@ -77,5 +92,22 @@ public class LuckPermsService {
             logger.warning("[LuckPerms] Failed to query perms for " + uuid + ": " + e.getMessage());
             return PermsResult.EMPTY;
         }
+    }
+
+    private static PermsResult fromUser(User user) {
+        Set<String> groups = user.getInheritedGroups(QueryOptions.nonContextual())
+                .stream()
+                .map(g -> g.getName().toLowerCase())
+                .collect(Collectors.toSet());
+
+        return new PermsResult(
+                groups.contains("sponsor"),
+                groups.contains("moderator") || groups.contains("moderator_light"),
+                groups.contains("admin") || groups.contains("admin_light") || groups.contains("owner")
+        );
+    }
+
+    private static boolean explicit(Player player, String permission) {
+        return player.isPermissionSet(permission) && player.hasPermission(permission);
     }
 }

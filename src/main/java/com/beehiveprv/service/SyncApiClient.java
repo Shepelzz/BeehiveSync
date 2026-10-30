@@ -1,6 +1,7 @@
 package com.beehiveprv.service;
 
 import com.beehiveprv.dto.PlayerData;
+import com.beehiveprv.dto.RoleLists;
 
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -74,6 +75,34 @@ public class SyncApiClient {
             }
         } catch (Exception e) {
             logger.warning("Reset online HTTP error: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Sends the full role snapshot. The site resets every flag not present in the lists,
+     * so stale bans / roles don't hang on the site after they were removed in game.
+     */
+    public boolean sendRoles(RoleLists roles) {
+        if (!isConfigured()) return false;
+        try {
+            String rolesUrl = url.replace("sync.php", "roles.php");
+            HttpRequest req = HttpRequest.newBuilder()
+                    .uri(URI.create(rolesUrl))
+                    .header("Content-Type", "application/json")
+                    .header("Authorization", "Bearer " + token)
+                    .POST(HttpRequest.BodyPublishers.ofString(roles.toJson()))
+                    .build();
+
+            HttpResponse<String> resp = http.send(req, HttpResponse.BodyHandlers.ofString());
+            if (resp.statusCode() == 200) {
+                logger.info("Roles synced: " + resp.body());
+                return true;
+            }
+            logger.warning("Roles sync failed [" + resp.statusCode() + "]: " + resp.body());
+            return false;
+        } catch (Exception e) {
+            logger.warning("Roles sync HTTP error: " + e.getMessage());
+            return false;
         }
     }
 
